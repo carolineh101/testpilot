@@ -23,18 +23,15 @@ const EVENT_SEND_METRIC = 'testpilot::send-metric';
 const EVENT_RECEIVE_VARIANT_DEFS = 'testpilot::register-variants';
 const EVENT_SEND_VARIANTS = 'testpilot::receive-variants';
 
-// Minimum interval of time between main Telemetry pings in ms
-const PING_INTERVAL = 24 * 60 * 60 * 1000;
-
-// Interval between Telemetry ping time checks, more frequent than the actual
-// ping so we can play catch-up if the computer was asleep at the ping time.
-const PING_CHECK_INTERVAL = 10 * 60 * 1000;
-
 // List of preferences we'll override on install & restore on uninstall
 const PREFERENCE_OVERRIDES = {
   'toolkit.telemetry.enabled': true,
   'datareporting.healthreport.uploadEnabled': true
 };
+
+//
+TELEMETRY_TESTPILOT = 'testpilot';
+TELEMETRY_EXPERIMENT = 'testpilottest';
 
 let pingTimer = null;
 
@@ -65,68 +62,47 @@ const variantMaker = {
 const Metrics = module.exports = {
 
   init: function() {
-    if (!store.telemetryPingPayload) {
-      store.lastTelemetryPingTimestamp = false;
-      store.telemetryPingPayload = {
-        version: 1,
-        tests: {}
-      };
-    }
-
-    Metrics.maybePingTelemetry();
+    store.browserLoadedTimestamp = Date.now();
 
     Events.on(EVENT_SEND_METRIC, Metrics.onExperimentPing);
     Events.on(EVENT_RECEIVE_VARIANT_DEFS, Metrics.onReceiveVariantDefs);
   },
 
   onEnable: function() {
-    // Backup existing preference settings and then override.
-    store.metricsPrefsBackup = {};
-    Object.keys(PREFERENCE_OVERRIDES).forEach(name => {
-      store.metricsPrefsBackup[name] = PrefsService.get(name);
-      PrefsService.set(name, PREFERENCE_OVERRIDES[name]);
-    });
+    Metrics.prefs.backup();
   },
 
   onDisable: function() {
-    // Restore previous preference settings before override.
-    if (store.metricsPrefsBackup) {
+    Metrics.prefs.restore();
+  },
+
+  prefs: {
+    // Backup existing preference settings and then override.
+    backup: function() {
+      store.metricsPrefsBackup = {};
       Object.keys(PREFERENCE_OVERRIDES).forEach(name => {
-        PrefsService.set(name, store.metricsPrefsBackup[name]);
+        store.metricsPrefsBackup[name] = PrefsService.get(name);
+        PrefsService.set(name, PREFERENCE_OVERRIDES[name]);
       });
+    },
+
+    // Restore previous preference settings before override.
+    restore: function() {
+      if (store.metricsPrefsBackup) {
+        Object.keys(PREFERENCE_OVERRIDES).forEach(name => {
+          PrefsService.set(name, store.metricsPrefsBackup[name]);
+        });
+      }
     }
   },
 
   destroy: function() {
-    // Stop the ping timer, if any
-    if (pingTimer) {
-      clearTimeout(pingTimer);
-    }
     Events.off(EVENT_SEND_METRIC, Metrics.onExperimentPing);
-  },
-
-  maybePingTelemetry: function() {
-    const now = Date.now();
-    const shouldPing =
-      // Fresh install, no timestamp. Ping immediately.
-      (!store.lastTelemetryPingTimestamp) ||
-      // Subsequent pings should go out after PING_INTERVAL
-      (now - store.lastTelemetryPingTimestamp > PING_INTERVAL);
-
-    if (shouldPing) {
-      store.lastTelemetryPingTimestamp = now;
-      Metrics.pingTelemetry();
-    }
-
-    pingTimer = setTimeout(
-      Metrics.maybePingTelemetry,
-      PING_CHECK_INTERVAL
-    );
   },
 
   pingTelemetry: function() {
     TelemetryController.submitExternalPing(
-      'testpilot',
+      TELEMETRY_TESTPILOT,
       store.telemetryPingPayload,
       { addClientId: true, addEnvironment: true }
     );
@@ -171,9 +147,6 @@ const Metrics = module.exports = {
     const { subject, data } = ev;
     const dataParsed = JSON.parse(data);
 
-    // TODO: Map add-on ID (subject) to other pingTypes as necessary
-    const pingType = 'testpilottest';
-
     if (store.experimentVariants && subject in store.experimentVariants) {
       dataParsed.variants = store.experimentVariants[subject];
     }
@@ -185,7 +158,7 @@ const Metrics = module.exports = {
     };
 
     TelemetryController.submitExternalPing(
-      pingType, payload,
+      TELEMETRY_EXPERIMENT, payload,
       { addClientId: true, addEnvironment: true }
     );
   }
